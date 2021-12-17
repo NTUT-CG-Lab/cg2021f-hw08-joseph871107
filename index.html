@@ -44,7 +44,7 @@
         so.addChild("產生XYZ Slice gui", 2, true);
         so.addChild("呈現nrrd格式模型切片", 2, true);
         so.addChild("可以選擇產生的模型", 2, true);
-        so.addChild("呈現raw、dat格式模型切片", 2, false);
+        so.addChild("呈現raw、dat格式模型切片", 2, true);
         so.addChild("可將指定pvm檔轉raw並可成功開啟", 2, false);
 
         //產生自評表，參數如下所示
@@ -128,6 +128,23 @@
           case 'nrrd':
             fileReader.addEventListener("load", function(event) {
               loadNrrdFromData(this.result);
+            }, false);
+            break;
+          case 'raw':
+          case 'dat':
+            let x = parseInt(m[1]);
+            let y = parseInt(m[2]);
+            let z = parseInt(m[3]);
+            let type = m[4];
+            
+            fileReader.addEventListener("load", function(event) {
+              loadRawFromData(this.result, {
+                'x': x,
+                'y': y,
+                'z': z,
+                'type': type,
+              });
+              // loadNrrdFromData(this.result);
             }, false);
             break;
           default:
@@ -234,13 +251,8 @@
         scene2.add(axes2);
       }
 
-      class NrrdLoader{
-        constructor(data, callback){
-          //nrrd model
-          const loader = new NRRDLoader();
-          var scope = this;
-          var volume = loader.parse(data);
-
+      class ModelLoader{
+        constructor(volume, callback){
           //box helper to see the extend of the volume
           const geometry = new THREE.BoxGeometry(
             volume.xLength,
@@ -255,56 +267,37 @@
           const box = new THREE.BoxHelper(cube);
           box.applyMatrix4(volume.matrix);
 
-          scope.volume = volume;
-          scope.box = box;
-          scope.cube = cube;
+          this.volume = volume;
+          this.box = box;
+          this.cube = cube;
 
-          callback(scope);
+          callback(this);
         }
 
         render(scene, gui){
           var volume = this.volume;
-          //z plane
-          const sliceZ = volume.extractSlice(
-            "z",
-            Math.floor(volume.RASDimensions[2] / 4)
-          );
-          scene.add(sliceZ.mesh);
-          this.sliceZ = sliceZ;
-
-          //y plane
-          const sliceY = volume.extractSlice(
-            "y",
-            Math.floor(volume.RASDimensions[1] / 2)
-          );
-          scene.add(sliceY.mesh);
-          this.sliceY = sliceY;
-
-          //x plane
-          const sliceX = volume.extractSlice(
-            "x",
-            Math.floor(volume.RASDimensions[0] / 2)
-          );
-          scene.add(sliceX.mesh);
-          this.sliceX = sliceX;
+          scene.add(this.sliceZ.mesh);
+          scene.add(this.sliceY.mesh);
+          scene.add(this.sliceX.mesh);
+          var scope = this;
 
           gui
-            .add(sliceX, "index", 0, volume.RASDimensions[0], 1)
+            .add(this.sliceX, "index", 0, this.dimensions[0], 1)
             .name("indexX")
             .onChange(function () {
-              sliceX.repaint.call(sliceX);
+              scope.sliceX.repaint.call(scope.sliceX);
             });
           gui
-            .add(sliceY, "index", 0, volume.RASDimensions[1], 1)
+            .add(this.sliceY, "index", 0, this.dimensions[1], 1)
             .name("indexY")
             .onChange(function () {
-              sliceY.repaint.call(sliceY);
+              scope.sliceY.repaint.call(scope.sliceY);
             });
           gui
-            .add(sliceZ, "index", 0, volume.RASDimensions[2], 1)
+            .add(this.sliceZ, "index", 0, this.dimensions[2], 1)
             .name("indexZ")
             .onChange(function () {
-              sliceZ.repaint.call(sliceZ);
+              scope.sliceZ.repaint.call(scope.sliceZ);
           });
 
           scene.add(this.box);
@@ -323,6 +316,100 @@
         }
       }
 
+      class NrrdLoader extends ModelLoader{
+        constructor(data, callback){
+          //nrrd model
+          const loader = new NRRDLoader();
+          var volume = loader.parse(data);
+          super(volume, ()=>{});
+
+          this.dimensions = volume.RASDimensions;
+
+          //z plane
+          const sliceZ = volume.extractSlice(
+            "z",
+            Math.floor(this.dimensions[2] / 4)
+          );
+          this.sliceZ = sliceZ;
+
+          //y plane
+          const sliceY = volume.extractSlice(
+            "y",
+            Math.floor(this.dimensions[1] / 2)
+          );
+          this.sliceY = sliceY;
+
+          //x plane
+          const sliceX = volume.extractSlice(
+            "x",
+            Math.floor(this.dimensions[0] / 2)
+          );
+          this.sliceX = sliceX;
+
+          callback(this);
+        }
+      }
+
+      class RawLoader extends ModelLoader{
+        constructor(data, dec, callback){
+          var volume = new Volume(dec.x, dec.y, dec.z, dec.type, data);
+
+          const min_max = volume.computeMinMax();
+          const min = min_max[0];
+          const max = min_max[1];
+          volume.windowLow = min;
+          volume.windowHigh = max;
+
+          volume.matrix = new Matrix4();
+          const transitionMatrix = new Matrix4();
+          volume.inverseMatrix = new Matrix4();
+          volume.inverseMatrix.copy(volume.matrix).invert();
+          volume.RASDimensions = new THREE.Vector3(
+            volume.xLength,
+            volume.yLength,
+            volume.zLength
+          )
+            .applyMatrix4(volume.matrix)
+            .round()
+            .toArray()
+            .map(Math.abs);
+
+          if (volume.lowerThreshold === -Infinity) {
+            volume.lowerThreshold = min;
+          }
+          if (volume.upperThreshold === Infinity) {
+            volume.upperThreshold = max;
+          }
+          
+          super(volume, ()=>{});
+
+          this.dimensions = volume.RASDimensions;
+
+          //z plane
+          const sliceZ = volume.extractSlice(
+            "z",
+            Math.floor(this.dimensions[2] / 4)
+          );
+          this.sliceZ = sliceZ;
+
+          //y plane
+          const sliceY = volume.extractSlice(
+            "y",
+            Math.floor(this.dimensions[1] / 2)
+          );
+          this.sliceY = sliceY;
+
+          //x plane
+          const sliceX = volume.extractSlice(
+            "x",
+            Math.floor(this.dimensions[0] / 2)
+          );
+          this.sliceX = sliceX;
+
+          callback(this);
+        }
+      }
+
       var loadData = (fileName, callback) => {
         var xhr = new XMLHttpRequest();
         xhr.responseType = 'blob';
@@ -333,12 +420,23 @@
         xhr.send();
       }
 
-      var loadNrrdFromData = (data) => {
+      var replaceModelData = (model) => {
         if (currentModel)
           currentModel.remove();
         gui = new GUI();
-        currentModel = new NrrdLoader(data, (model) => {
-          model.render(scene, gui);
+        model.render(scene, gui);
+        currentModel = model;
+      }
+
+      var loadRawFromData = (data, dec) => {
+        new RawLoader(data, dec, (model) => {
+          replaceModelData(model);
+        });
+      }
+
+      var loadNrrdFromData = (data) => {
+        new NrrdLoader(data, (model) => {
+          replaceModelData(model);
         });
       }
 
